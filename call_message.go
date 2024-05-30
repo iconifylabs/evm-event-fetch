@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/big"
+	"os"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -14,15 +16,9 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-const (
-	rpcURL         = "https://api.avax.network/ext/bc/C/rpc"
-	contractAddr   = "0xfC83a3F252090B26f92F91DFB9dC3Eb710AdAf1b"
-	blockBatchSize = 2000
-	eventSig       = "CallMessage(string,string,uint256,uint256,bytes)"
-)
-
-func evm_main() {
+func call_message(startBlock uint64, detail_logs bool) {
 	sequence_numbers := []*big.Int{}
+	request_ids := []*big.Int{}
 	client, err := ethclient.Dial(rpcURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to the Ethereum client: %v", err)
@@ -34,12 +30,11 @@ func evm_main() {
 	}
 
 	latestBlock := header.Number.Uint64()
-	startBlock := uint64(40428048) // Xcall Deploy Height
 
 	contractAddress := common.HexToAddress(contractAddr)
-	eventSigHash := crypto.Keccak256Hash([]byte(eventSig))
+	eventSigHash := crypto.Keccak256Hash([]byte(CALL_MESSAGE_EVENT))
 
-	contractAbi, err := abi.JSON(strings.NewReader(`[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"string","name":"_from","type":"string"},{"indexed":true,"internalType":"string","name":"_to","type":"string"},{"indexed":true,"internalType":"uint256","name":"_sn","type":"uint256"},{"indexed":false,"internalType":"uint256","name":"_reqId","type":"uint256"},{"indexed":false,"internalType":"bytes","name":"_data","type":"bytes"}],"name":"CallMessage","type":"event"}]`))
+	contractAbi, err := abi.JSON(strings.NewReader(CALL_MESSAGE_ABI))
 	if err != nil {
 		log.Fatalf("Failed to parse contract ABI: %v", err)
 	}
@@ -80,17 +75,42 @@ func evm_main() {
 				event.To = common.BytesToAddress(vLog.Topics[2].Bytes()).Hex()
 				event.SN = new(big.Int).SetBytes(vLog.Topics[3].Bytes())
 
-				fmt.Printf("Block Number: %d\n", vLog.BlockNumber)
-				// fmt.Printf("From: %s\n", event.From)
-				// fmt.Printf("To: %s\n", event.To)
-				fmt.Printf("SN: %s\n", event.SN.String())
-				// fmt.Printf("ReqId: %s\n", event.ReqId.String())
-				// fmt.Printf("Data: %s\n", event.Data)
-				fmt.Println()
+				if detail_logs {
+					fmt.Printf("Block Number: %d\n", vLog.BlockNumber)
+					fmt.Printf("Txn Hash: %s\n", vLog.TxHash)
+					// fmt.Printf("From: %s\n", event.From)
+					// fmt.Printf("To: %s\n", event.To)
+					fmt.Printf("SN: %s\n", event.SN.String())
+					fmt.Printf("ReqId: %s\n", event.ReqId.String())
+					// fmt.Printf("Data: %s\n", event.Data)
+					fmt.Println()
+				}
 				sequence_numbers = append(sequence_numbers, event.SN)
+				request_ids = append(request_ids, event.ReqId)
 			}
 		}
 	}
+	mappings := make(map[*big.Int]*big.Int)
 
-	fmt.Printf("%+v\n\n", sequence_numbers)
+	for i := 0; i < len(sequence_numbers); i++ {
+		mappings[request_ids[i]] = sequence_numbers[i]
+	}
+
+	jsonData, err := json.MarshalIndent(mappings, "", "  ")
+	if err != nil {
+		log.Fatalf("Error marshalling to JSON: %v", err)
+	}
+
+	file, err := os.Create("mappings.json")
+	if err != nil {
+		log.Fatalf("Error creating JSON file: %v", err)
+	}
+	defer file.Close()
+
+	_, err = file.Write(jsonData)
+	if err != nil {
+		log.Fatalf("Error writing to JSON file: %v", err)
+	}
+
+	fmt.Println("Mappings saved to mappings.json")
 }
